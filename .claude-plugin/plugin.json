@@ -1,0 +1,58 @@
+{
+  "name": "session-protocol",
+  "version": "1.0.0",
+  "description": "Session memory for Claude Code and Codex: hot.md + session log at the end of every session, recorded in the background when you forget.",
+  "author": {
+    "name": "Danil Savchenko",
+    "url": "https://github.com/savchenko-dev"
+  },
+  "homepage": "https://github.com/savchenko-dev/session-protocol",
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "hooks",
+    "session",
+    "handoff",
+    "obsidian"
+  ],
+  "userConfig": {
+    "auto_close": {
+      "type": "boolean",
+      "title": "Auto-close forgotten sessions",
+      "description": "When a working session ends without the protocol, run it in the background (a headless Claude run, costs tokens). Off: only remind.",
+      "default": true
+    },
+    "model": {
+      "type": "string",
+      "title": "Model for auto-close",
+      "description": "Model for the background run, e.g. sonnet or haiku. Empty: your default model.",
+      "default": ""
+    },
+    "min_prompts": {
+      "type": "number",
+      "title": "Minimum prompts",
+      "description": "Sessions with fewer prompts count as trivial and are not closed.",
+      "default": 2,
+      "min": 1
+    },
+    "extra_tools": {
+      "type": "string",
+      "title": "Extra allowed tools",
+      "description": "Comma-separated tool rules the background run may use besides the read-only defaults, e.g. read-only MCP tools of your issue tracker.",
+      "default": ""
+    },
+    "add_dirs": {
+      "type": "string",
+      "title": "Extra directories",
+      "description": "Colon-separated directories the background run may read, e.g. other repos the sessions touch.",
+      "default": ""
+    },
+    "notify_command": {
+      "type": "string",
+      "title": "Notify command",
+      "description": "Command that gets <title> <body> as two arguments (Slack, Telegram, ntfy). Empty: desktop notification.",
+      "default": ""
+    }
+  },
+  "hooks": "./hooks/claude-hooks.json"
+}

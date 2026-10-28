@@ -1,0 +1,37 @@
+{
+  "name": "session-protocol",
+  "version": "1.0.0",
+  "description": "Session memory for Claude Code and Codex: hot.md + session log at the end of every session, recorded in the background when you forget.",
+  "author": {
+    "name": "Danil Savchenko",
+    "url": "https://github.com/savchenko-dev"
+  },
+  "homepage": "https://github.com/savchenko-dev/session-protocol",
+  "repository": "https://github.com/savchenko-dev/session-protocol",
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "hooks",
+    "session",
+    "handoff",
+    "obsidian"
+  ],
+  "skills": "./skills/",
+  "hooks": "./hooks/codex-hooks.json",
+  "interface": {
+    "displayName": "Session protocol",
+    "shortDescription": "Session memory that records itself",
+    "longDescription": "Keeps _meta/hot.md and a dated session log up to date at the end of every session, and records forgotten sessions in the background.",
+    "developerName": "Danil Savchenko",
+    "category": "Productivity",
+    "capabilities": [
+      "Instructions",
+      "Lifecycle hooks"
+    ],
+    "websiteURL": "https://github.com/savchenko-dev/session-protocol",
+    "defaultPrompt": [
+      "end session",
+      "Show sessions that were not recorded."
+    ]
+  }
+}

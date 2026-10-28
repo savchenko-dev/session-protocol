@@ -1,0 +1,50 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/session_protocol.py\" hook prompt --agent claude",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/session_protocol.py\" hook written --agent claude",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/session_protocol.py\" hook session-end --agent claude",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/session_protocol.py\" hook session-start --agent claude",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}

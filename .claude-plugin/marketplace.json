@@ -1,0 +1,16 @@
+{
+  "name": "savchenko-dev",
+  "description": "Claude Code plugins by savchenko-dev",
+  "owner": {
+    "name": "Danil Savchenko",
+    "url": "https://github.com/savchenko-dev"
+  },
+  "plugins": [
+    {
+      "name": "session-protocol",
+      "description": "End-of-session protocol for Claude Code: hot.md + session log, auto-closed in the background when you forget.",
+      "source": "./",
+      "category": "productivity"
+    }
+  ]
+}
