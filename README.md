@@ -88,6 +88,10 @@ heading is how the plugin knows a project uses it.
 4. If it fails (no network, laptop went to sleep), the next session in the project mentions
    it, and the `sessions` skill retries.
 
+Desktop apps keep sessions open for days and may never report that a session ended. So when
+a new session starts, any session of the same project that has been idle for `stale_hours`
+(6 by default) and is not recorded is treated as ended and recorded the same way.
+
 Sessions resumed later and continued are tracked too: new prompts after a close reopen them.
 
 ## Settings
@@ -103,6 +107,7 @@ In Claude Code you can also set them in `/plugin` → session-protocol → confi
 | Setting | Default | Meaning |
 |---|---|---|
 | `auto_close` | `true` | `false` = only notify and remind |
+| `stale_hours` | `6` | an idle unrecorded session counts as ended after this many hours (for apps that never report session end) |
 | `model` | agent default | model for the background run; a cheap one is usually enough |
 | `min_prompts` | `2` | shorter sessions count as trivial |
 | `extra_tools` | - | Claude Code: extra allowed tools for the background run, e.g. read-only MCP tools of your issue tracker |
@@ -154,6 +159,16 @@ hot-drift-report.sh ~/notes            # skips if the last run was < 13 days ago
 Schedule it weekly: the 13-day stamp makes it fortnightly and catches up after sleep. Fold the
 result in with `hot-actualize`. `HOT_DRIFT_NOTIFY_CMD` gets the report on stdin, and
 `HOT_DRIFT_TOOLS` adds your tracker's read-only tools.
+
+## Desktop apps
+
+- **Claude Desktop, Code tab** runs Claude Code, so the plugin works there: install it with
+  the same `/plugin` command in the Code tab. The plain chat tab has no plugins or hooks.
+- **Codex desktop app** picks up plugins installed with `codex plugin add`; restart the app
+  after installing.
+- The background run needs a CLI: `claude` with `--restricted` (Claude Desktop ships an older
+  copy without it, which is not used) or `codex`. If none is found, nothing runs unrestricted -
+  the next session tells you, and `npm i -g @anthropic-ai/claude-code` / `@openai/codex` fixes it.
 
 ## Requirements
 

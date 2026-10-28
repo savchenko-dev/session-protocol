@@ -31,6 +31,7 @@ the project, Bash only for a read-only allowlist. Codex: `--sandbox workspace-wr
 import argparse
 import datetime
 import fcntl
+import glob
 import json
 import os
 import re
@@ -59,7 +60,7 @@ INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md", os.path.join(".claude", "CLAUDE.m
 SHELL_TOOLS = ("Bash", "shell", "exec_command", "local_shell")
 STATE_TTL_DAYS = 14
 WORKER_TIMEOUT_S = 30 * 60
-DEFAULTS = {"auto_close": "true", "model": "", "min_prompts": "2", "extra_tools": "",
+DEFAULTS = {"auto_close": "true", "stale_hours": "6", "model": "", "min_prompts": "2", "extra_tools": "",
             "add_dirs": "", "notify_command": "", "max_turns": "80",
             "marker": DEFAULT_MARKER, "session_log_pattern": DEFAULT_LOG_PATTERN, "prompt_file": ""}
 CLAUDE_READ_ONLY_BASH = [
@@ -269,11 +270,33 @@ def find_protocol_root(cwd):
     return None
 
 
-def find_binary(name):
-    for cand in (shutil.which(name), os.path.join(HOME, ".local", "bin", name),
-                 os.path.join(HOME, ".claude", "local", name), f"/opt/homebrew/bin/{name}",
-                 f"/usr/local/bin/{name}"):
-        if cand and os.access(cand, os.X_OK):
+APP_BUNDLED = {
+    "claude": [os.path.join(HOME, "Library", "Application Support", "Claude", "claude-code", "*", "claude.app", "Contents", "MacOS", "claude")],
+    "codex": [os.path.join(apps, "Codex.app", "Contents", sub, "codex")
+              for apps in ("/Applications", os.path.join(HOME, "Applications"))
+              for sub in ("Resources", "MacOS", os.path.join("Resources", "*"))],
+}
+
+
+def binary_candidates(name):
+    """CLI on PATH first, then the copies desktop apps ship inside their bundles (GUI apps
+    don't hand hooks the shell PATH)."""
+    cands = [shutil.which(name), os.path.join(HOME, ".local", "bin", name),
+             os.path.join(HOME, ".claude", "local", name), f"/opt/homebrew/bin/{name}", f"/usr/local/bin/{name}"]
+    for pattern in APP_BUNDLED.get(name, []):
+        cands += sorted(glob.glob(pattern), reverse=True)
+    return [c for c in dict.fromkeys(cands) if c and os.access(c, os.X_OK)]
+
+
+def find_binary(name, required_flag=None):
+    for cand in binary_candidates(name):
+        if not required_flag:
+            return cand
+        try:
+            help_text = subprocess.run([cand, "--help"], capture_output=True, text=True, timeout=20).stdout
+        except Exception:
+            continue
+        if required_flag in help_text:
             return cand
     return None
 
@@ -339,7 +362,7 @@ def child_env():
 
 
 def claude_command(sid, cwd, root):
-    claude = find_binary("claude")
+    claude = find_binary("claude", "--restricted")
     if not claude:
         return None
     allowed = ["Read", "Glob", "Grep", f"Edit(/{os.path.abspath(root)}/**)"] + CLAUDE_READ_ONLY_BASH + opt_list("extra_tools")
@@ -377,7 +400,10 @@ def run_protocol(agent, sid, cwd, root, reason, date):
         out_file = os.path.join(tmp, "last-message.txt")
         cmd = codex_command(sid, cwd, root, out_file) if agent == "codex" else claude_command(sid, cwd, root)
         if not cmd:
-            return dict(ok=False, error=f"{agent} binary not found")
+            hint = ("no Claude Code CLI with --restricted found - install or update it: "
+                    "npm i -g @anthropic-ai/claude-code" if agent == "claude" else
+                    "codex CLI not found - install it: npm i -g @openai/codex")
+            return dict(ok=False, error=hint)
         try:
             proc = subprocess.run(cmd, cwd=cwd, env=child_env(), input=prompt,
                                   capture_output=True, text=True, timeout=WORKER_TIMEOUT_S)
@@ -532,6 +558,20 @@ def hook_session_end(data, agent):
     if closed_at_prompts(sid) is None and n < opt_int("min_prompts"):
         log(f"ok session={sid8} reason={reason} trivial prompts={n} topic={topic!r}")
         return 0
+    mark_unclosed(sid, cwd, root, reason, agent)
+    return 0
+
+
+def needs_recording(sid):
+    if os.path.exists(spath(sid, "skip")) or is_closed(sid):
+        return False
+    return closed_at_prompts(sid) is not None or prompts_of(sid) >= opt_int("min_prompts")
+
+
+def mark_unclosed(sid, cwd, root, reason, agent):
+    sid8 = short(sid)
+    n = prompts_of(sid)
+    topic = read_text(sid, "topic")
     date = session_date(sid)
     write_unclosed(sid, status="pending", agent=read_text(sid, "agent") or agent, cwd=cwd, root=root,
                    date=date, topic=topic, prompts=n, reason=reason, at=now_iso())
@@ -541,7 +581,6 @@ def hook_session_end(data, agent):
     else:
         log(f"UNCLOSED session={sid8} reason={reason} date={date} prompts={n} topic={topic!r} (auto-close off)")
         spawn("notify", "Session not recorded", f"{sid8} ({topic}) - run the sessions skill to close it")
-    return 0
 
 
 def newest_mtime(sid):
@@ -596,11 +635,29 @@ def describe(m):
     return "not recorded"
 
 
+def adopt_stale_sessions(root, current, agent):
+    """Desktop apps keep sessions open for days and may never send SessionEnd. A session of
+    this project idle for `stale_hours` that still needs recording is treated as ended."""
+    if not os.path.isdir(STATE_DIR):
+        return
+    limit = opt_int("stale_hours") * 3600
+    for sid in os.listdir(STATE_DIR):
+        if sid == current or read_unclosed(sid) or not os.path.isdir(sdir(sid)):
+            continue
+        cwd = read_text(sid, "cwd")
+        if not cwd or age_s(read_text(sid, "last")) < limit or not needs_recording(sid):
+            continue
+        if find_protocol_root(cwd) == root:
+            log(f"STALE session={short(sid)}: idle {int(age_s(read_text(sid, 'last')) // 3600)}h without SessionEnd")
+            mark_unclosed(sid, cwd, root, "stale", agent)
+
+
 def hook_session_start(data, agent):
     root = find_protocol_root(data.get("cwd") or os.getcwd())
     if not root:
         return 0
     current = data.get("session_id") or ""
+    adopt_stale_sessions(root, current, agent)
     pending = [m for m in pending_markers(root) if m.get("session_id") != current]
     if not pending:
         return 0

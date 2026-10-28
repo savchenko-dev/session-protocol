@@ -1,6 +1,6 @@
 {
   "name": "session-protocol",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Session memory for Claude Code and Codex: hot.md + session log at the end of every session, recorded in the background when you forget.",
   "author": {
     "name": "Danil Savchenko",
