@@ -62,7 +62,8 @@ STATE_TTL_DAYS = 14
 WORKER_TIMEOUT_S = 30 * 60
 DEFAULTS = {"auto_close": "true", "stale_hours": "6", "model": "", "min_prompts": "2", "extra_tools": "",
             "add_dirs": "", "notify_command": "", "max_turns": "80",
-            "marker": DEFAULT_MARKER, "session_log_pattern": DEFAULT_LOG_PATTERN, "prompt_file": ""}
+            "marker": DEFAULT_MARKER, "session_log_pattern": DEFAULT_LOG_PATTERN, "prompt_file": "",
+            "memory_dir": "~/agent-memory"}
 CLAUDE_READ_ONLY_BASH = [
     "Bash(date:*)", "Bash(ls:*)", "Bash(pwd)",
     "Bash(git status:*)", "Bash(git log:*)", "Bash(git diff:*)", "Bash(git show:*)",
@@ -135,7 +136,7 @@ def session_log_pattern():
 
 DEFAULT_PROMPT = """The session ended (reason={reason}) without the End-of-session protocol - the user exited and forgot to ask for it. Run the End-of-session protocol in full, as if the user had typed "end session".
 
-First read the protocol: it is the "End-of-session protocol" section of {instructions}. Follow it exactly - file names, format and language come from there.
+First read the protocol: it is the "End-of-session protocol" section of {instructions}. Follow it exactly - file names, format and language come from there. The memory files (hot file, session log) live under `{root}`, which may not be the current folder.
 
 1. Re-read the live state of everything this session touched (issues, PRs, branches). Read only: do not post, comment, commit or push anywhere.
    - Run shell commands one at a time, without `&&`, `;`, `|` or `$(...)`: only simple read-only commands are allowed in this run.
@@ -288,6 +289,25 @@ def binary_candidates(name):
     return [c for c in dict.fromkeys(cands) if c and os.access(c, os.X_OK)]
 
 
+def memory_dir():
+    return os.path.abspath(os.path.expanduser(opt("memory_dir")))
+
+
+def watched_dirs():
+    return [os.path.abspath(os.path.expanduser(d)) for d in load_json(CONFIG_FILE).get("watch", [])]
+
+
+def in_watched(cwd):
+    real = os.path.realpath(cwd)
+    return any(real == os.path.realpath(d) or real.startswith(os.path.realpath(d) + os.sep) for d in watched_dirs())
+
+
+def resolve_root(cwd):
+    """A project with its own protocol keeps its own memory; otherwise a watched folder
+    uses the shared memory folder; anything else is not tracked."""
+    return find_protocol_root(cwd) or (memory_dir() if in_watched(cwd) else None)
+
+
 def find_binary(name, required_flag=None):
     for cand in binary_candidates(name):
         if not required_flag:
@@ -347,7 +367,8 @@ def load_prompt(reason, date, root):
         with open(os.path.expanduser(opt("prompt_file")), encoding="utf-8") as fh:
             template = fh.read()
     instructions = " and ".join(f"`{f}`" for f in protocol_files(root)) or "the project instructions"
-    return template.replace("{reason}", reason).replace("{date}", date).replace("{instructions}", instructions)
+    return (template.replace("{reason}", reason).replace("{date}", date)
+            .replace("{instructions}", instructions).replace("{root}", root))
 
 
 def extra_dirs(root, cwd):
@@ -455,7 +476,7 @@ def close_session(sid, reason):
     date = session_date(sid)
     marker = read_unclosed(sid) or {}
     cwd = read_text(sid, "cwd") or marker.get("cwd") or os.getcwd()
-    root = marker.get("root") or find_protocol_root(cwd) or cwd
+    root = marker.get("root") or resolve_root(cwd) or cwd
     if is_closed(sid):
         log(f"worker skip session={sid8}: closed, no prompts since")
         return 0
@@ -545,7 +566,7 @@ def hook_session_end(data, agent):
     sid8 = short(sid)
     n = prompts_of(sid)
     topic = read_text(sid, "topic")
-    root = find_protocol_root(cwd)
+    root = resolve_root(cwd)
     if not root:
         forget(sid)
         return 0
@@ -647,22 +668,37 @@ def adopt_stale_sessions(root, current, agent):
         cwd = read_text(sid, "cwd")
         if not cwd or age_s(read_text(sid, "last")) < limit or not needs_recording(sid):
             continue
-        if find_protocol_root(cwd) == root:
+        if resolve_root(cwd) == root:
             log(f"STALE session={short(sid)}: idle {int(age_s(read_text(sid, 'last')) // 3600)}h without SessionEnd")
             mark_unclosed(sid, cwd, root, "stale", agent)
 
 
+def memory_hint(root, cwd):
+    if find_protocol_root(cwd):
+        return ""
+    return (f"[session-protocol] This folder is tracked by shared session memory in `{root}`. "
+            f"Before starting, read `{root}/_meta/hot.md`. When the session ends (\"end session\"), run the "
+            f"End-of-session protocol from `{root}/AGENTS.md` and write the memory files there, "
+            "not in this folder.\n\n")
+
+
 def hook_session_start(data, agent):
-    root = find_protocol_root(data.get("cwd") or os.getcwd())
+    cwd = data.get("cwd") or os.getcwd()
+    root = resolve_root(cwd)
     if not root:
         return 0
     current = data.get("session_id") or ""
     adopt_stale_sessions(root, current, agent)
     pending = [m for m in pending_markers(root) if m.get("session_id") != current]
+    hint = memory_hint(root, cwd)
+    if not pending and not hint:
+        return 0
     if not pending:
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart",
+                                                 "additionalContext": hint.strip()}}, ensure_ascii=False))
         return 0
     lines = [f"- `{short(m['session_id'])}` {m.get('date')} \"{m.get('topic')}\" - {describe(m)}" for m in pending]
-    context = (
+    context = hint + (
         "[session-protocol] Earlier sessions of this project without a session log:\n" + "\n".join(lines) +
         "\n\nMention this to the user in one short line in your first reply. If any are not being closed "
         "right now, suggest the `sessions` skill of the session-protocol plugin to close or dismiss them. "
@@ -800,29 +836,59 @@ def append_once(path, text, marker):
     return f"{path}: {'updated' if existed else 'created'}"
 
 
-def cmd_init(args):
-    root = os.path.abspath(args.dir)
+def create_memory(root, claude_import):
     with open(os.path.join(TEMPLATES, "AGENTS.md"), encoding="utf-8") as fh:
         section = fh.read()
+    os.makedirs(root, exist_ok=True)
     if any(has_marker(os.path.join(root, n)) for n in INSTRUCTION_FILES):
-        print("Protocol already present in the project instructions, left as is")
+        if claude_import:
+            print(f"{root}: protocol already there, left as is")
     else:
         print(append_once(os.path.join(root, "AGENTS.md"), section, opt("marker")))
     claude_md = os.path.join(root, "CLAUDE.md")
-    if not has_marker(claude_md):
+    if claude_import and not has_marker(claude_md):
         print(append_once(claude_md, "@AGENTS.md\n", "@AGENTS.md"))
     os.makedirs(os.path.join(root, "_meta", "sessions"), exist_ok=True)
-    today = datetime.date.today().isoformat()
-    for name in ("hot.md", "shipped-log.md"):
-        dst = os.path.join(root, "_meta", name)
-        if os.path.exists(dst):
-            print(f"{dst}: exists, left as is")
-            continue
-        with open(os.path.join(TEMPLATES, "_meta", name), encoding="utf-8") as fh:
-            body = fh.read().replace("YYYY-MM-DD", today)
-        with open(dst, "w", encoding="utf-8") as fh:
-            fh.write(body)
-        print(f"{dst}: created")
+    hot = os.path.join(root, "_meta", "hot.md")
+    if os.path.exists(hot):
+        if claude_import:
+            print(f"{hot}: exists, left as is")
+        return
+    with open(os.path.join(TEMPLATES, "_meta", "hot.md"), encoding="utf-8") as fh:
+        body = fh.read().replace("YYYY-MM-DD", datetime.date.today().isoformat())
+    with open(hot, "w", encoding="utf-8") as fh:
+        fh.write(body)
+    print(f"{hot}: created")
+
+
+def cmd_init(args):
+    create_memory(os.path.abspath(args.dir), claude_import=True)
+    return 0
+
+
+def cmd_watch(args):
+    config = load_json(CONFIG_FILE)
+    watch = [os.path.abspath(os.path.expanduser(d)) for d in config.get("watch", [])]
+    dirs = [os.path.abspath(os.path.expanduser(d)) for d in args.dirs]
+    if args.action == "add":
+        if not dirs:
+            print("usage: watch add <dir>...")
+            return 2
+        missing = [d for d in dirs if not os.path.isdir(d)]
+        if missing:
+            print(f"not a directory: {', '.join(missing)}")
+            return 2
+        watch += [d for d in dirs if d not in watch]
+        create_memory(memory_dir(), claude_import=False)
+    elif args.action == "remove":
+        watch = [d for d in watch if d not in dirs]
+    config["watch"] = watch
+    if args.action:
+        save_json(CONFIG_FILE, config)
+    print(f"memory: {memory_dir()}")
+    print("watched folders:" if watch else "watched folders: none (`watch add <dir>`)")
+    for d in watch:
+        print(f"  {d}")
     return 0
 
 
@@ -843,9 +909,13 @@ def main():
     p = sub.add_parser("skip", help="don't record a session (default: the current one)")
     p.add_argument("session", nargs="?")
     p.set_defaults(func=cmd_skip)
-    p = sub.add_parser("init", help="set up a project: protocol in AGENTS.md, CLAUDE.md import, _meta/")
+    p = sub.add_parser("init", help="give one project its own memory: protocol in AGENTS.md, CLAUDE.md import, _meta/")
     p.add_argument("dir", nargs="?", default=".")
     p.set_defaults(func=cmd_init)
+    p = sub.add_parser("watch", help="shared memory for folders: `watch`, `watch add <dir>...`, `watch remove <dir>...`")
+    p.add_argument("action", nargs="?", choices=("add", "remove"))
+    p.add_argument("dirs", nargs="*")
+    p.set_defaults(func=cmd_watch)
     p = sub.add_parser("config", help="show settings, or `config <key> [value]` to set / reset one")
     p.add_argument("key", nargs="?")
     p.add_argument("value", nargs="?")

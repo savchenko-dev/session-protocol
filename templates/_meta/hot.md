@@ -5,10 +5,10 @@ updated: YYYY-MM-DD
 
 # Hot
 
-Rolling session context - **active / open threads only**. Finished work moves to
-[[shipped-log]], one line each. New session blocks go right below this intro, newest first.
+Rolling session context - **active / open threads only**. Finished threads are deleted; their
+history stays in the session logs. New session blocks go right below this intro, newest first.
 
-## <topic> - YYYY-MM-DD
+## <project or folder>: <topic> - YYYY-MM-DD
 
 - Live: <issue / PR / branch state, re-read at the end of the session>
 - Decided: <decision and why>

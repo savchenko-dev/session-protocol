@@ -2,11 +2,17 @@
 
 Session memory for **Claude Code** and **Codex** that writes itself.
 
-At the end of a working session the agent updates two files in your project:
+You pick the folders you work in. Every session started in one of them reads one shared
+memory at the start and updates it at the end:
 
-- `_meta/hot.md` - the open threads: what is in flight, what was decided, what's next.
-  The next session reads it first and picks up where you left off.
-- `_meta/sessions/YYYY-MM-DD.md` - a log of what each session did.
+```text
+~/agent-memory/
+├── AGENTS.md                  the protocol: what to do at the end of a session
+└── _meta/
+    ├── hot.md                 open threads across all your folders - what's in flight,
+    │                          what was decided, what's next. Read first by every session.
+    └── sessions/YYYY-MM-DD.md what each session did that day
+```
 
 The weak spot of any "write it down at the end" routine is the end: you close the terminal
 and forget. This plugin notices that and **records the session for you in the background**.
@@ -38,8 +44,10 @@ codex plugin add session-protocol@savchenko-dev
 
 Then run `codex`, open `/hooks`, review and trust the plugin's hooks.
 
-**Both:** restart the agent once so the hooks load. Then, in each project you want a memory
-for, ask it to **set up session memory** (Claude Code: `/session-protocol:session-setup`).
+**Both:** restart the agent once so the hooks load. Then, in a folder you want remembered,
+say **"track this folder"** (Claude Code: `/session-protocol:track-folder`). That's it: this
+session and every later one started in that folder or below it now use the shared memory.
+Sessions anywhere else are left alone.
 
 ## Use
 
@@ -48,36 +56,49 @@ the session gets recorded in the background, and you get a notification.
 
 | Skill | When |
 |---|---|
-| `session-setup` | once per project: protocol in `AGENTS.md`, `CLAUDE.md` imports it, `_meta/` files |
+| `track-folder` | add the current folder to memory; `off` removes it |
 | `end-session` | wrap up now (same as saying "end session") |
 | `skip-session` | this session is not worth recording - a quick question, an experiment |
 | `sessions` | list sessions that were not recorded; record or dismiss them |
-| `hot-actualize` | sync hot.md with live issue / PR / git state, move finished threads to the shipped log |
+| `hot-actualize` | sync hot.md with live issue / PR / git state, drop finished threads |
 
 In Claude Code they are `/session-protocol:<skill>`; in Codex, ask for them by name or pick
 them from the skills list. You rarely need `sessions`: when a session was left unrecorded, the
-next session in that project tells you in one line.
+next session in a tracked folder tells you in one line.
 
 The same commands work in a terminal:
 
 ```bash
-~/.session-protocol/session-protocol list
+~/.session-protocol/session-protocol watch                 # tracked folders + memory path
+~/.session-protocol/session-protocol watch add ~/work ~/src
+~/.session-protocol/session-protocol watch remove ~/src
+~/.session-protocol/session-protocol list                  # unrecorded sessions
 ~/.session-protocol/session-protocol close <id|all>
 ~/.session-protocol/session-protocol config
 ```
 
-## One protocol for both agents
+## The protocol
 
-`session-setup` puts the protocol into `AGENTS.md` (Codex reads it) and adds `@AGENTS.md` to
-`CLAUDE.md` (Claude Code reads that). The protocol is plain text: language, file layout, which
-trackers to re-read - edit it freely and keep the heading `End-of-session protocol`. That
-heading is how the plugin knows a project uses it.
+The protocol is plain text in `~/agent-memory/AGENTS.md`: language, format, which trackers to
+re-read, what goes into hot.md. Edit it freely and keep the heading `End-of-session protocol`.
+Both agents get it the same way: when a session starts in a tracked folder, the plugin tells
+the agent where the memory is. Your own `CLAUDE.md` / `AGENTS.md` files are not touched.
+
+hot.md keeps only open threads. A finished thread is simply deleted - its history stays in
+the session logs.
+
+### A separate memory for one project
+
+If a project should keep its memory inside its own repo instead, run
+`~/.session-protocol/session-protocol init` in its root. That puts the protocol into the
+project's `AGENTS.md` (and `@AGENTS.md` into its `CLAUDE.md`) and creates `_meta/` there.
+A project with its own protocol always uses it, even inside a tracked folder.
 
 ## What happens when you forget
 
 1. While you work, the plugin counts your prompts. Writing the session log marks the session
    as recorded.
-2. You exit a session that has the protocol, has 2+ prompts and is not recorded. You get a
+2. You exit a session in a tracked folder that has 2+ prompts and is not recorded. You get a
    desktop notification, and a background run starts.
 3. The background run resumes your session headless and does what "end session" would do:
    - `claude -p --resume <id>` for Claude Code sessions;
@@ -85,11 +106,11 @@ heading is how the plugin knows a project uses it.
 
    It re-reads live state, then writes hot.md and the log. A second notification tells you
    the result.
-4. If it fails (no network, laptop went to sleep), the next session in the project mentions
-   it, and the `sessions` skill retries.
+4. If it fails (no network, laptop went to sleep), the next session in a tracked folder
+   mentions it, and the `sessions` skill retries.
 
 Desktop apps keep sessions open for days and may never report that a session ended. So when
-a new session starts, any session of the same project that has been idle for `stale_hours`
+a new session starts, any session of the same memory that has been idle for `stale_hours`
 (6 by default) and is not recorded is treated as ended and recorded the same way.
 
 Sessions resumed later and continued are tracked too: new prompts after a close reopen them.
@@ -106,6 +127,7 @@ In Claude Code you can also set them in `/plugin` → session-protocol → confi
 
 | Setting | Default | Meaning |
 |---|---|---|
+| `memory_dir` | `~/agent-memory` | where the shared memory lives - e.g. a folder in your notes vault |
 | `auto_close` | `true` | `false` = only notify and remind |
 | `stale_hours` | `6` | an idle unrecorded session counts as ended after this many hours (for apps that never report session end) |
 | `model` | agent default | model for the background run; a cheap one is usually enough |
@@ -116,7 +138,7 @@ In Claude Code you can also set them in `/plugin` → session-protocol → confi
 | `max_turns` | `80` | Claude Code: turn limit for the background run |
 | `marker` | `End-of-session protocol` | text that opts a project in |
 | `session_log_pattern` | `_meta/sessions/\d{4}-\d{2}-\d{2}\.md` | regex for the session log path |
-| `prompt_file` | built in | your own background prompt; `{date}`, `{reason}`, `{instructions}` are filled in |
+| `prompt_file` | built in | your own background prompt; `{date}`, `{reason}`, `{instructions}`, `{root}` are filled in |
 
 ## Safety
 
@@ -125,12 +147,13 @@ instructions from other people. So it runs locked down.
 
 **Claude Code:** `--restricted --permission-mode dontAsk`
 - your settings files and their allow rules are ignored, and `bypassPermissions` is refused;
-- edits only inside the project; writes to settings and git files are refused;
+- edits only inside the memory folder - never in your code; writes to settings and git files
+  are refused;
 - shell only for read-only commands (`git status/log/diff/show`, `gh pr view/list`,
   `gh issue view/list`, `ls`, `date`), with `git --output` denied.
 
 **Codex:** `--sandbox workspace-write`
-- writes only inside the project;
+- writes only inside the session's folder and the memory folder;
 - no network, so it cannot push or post (it also cannot re-read PRs; it marks them "not
   re-checked").
 

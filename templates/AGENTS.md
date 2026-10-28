@@ -1,6 +1,7 @@
 ## Session memory
 
-Before doing anything in this project, read `_meta/hot.md` - what we worked on recently.
+Before doing anything, read `_meta/hot.md` - what we worked on recently. All `_meta/` paths
+here are relative to the folder this file is in.
 
 ## End-of-session protocol
 
@@ -14,12 +15,12 @@ Before we end any working session (when I say "end session", "wrap up", or simil
      committed and pushed. Never infer commit or push state from your own edits: I may have
      committed or reset things myself while you kept working.
    - If live state contradicts what was said earlier in the session, live state wins - flag the delta.
-2. **Update `_meta/hot.md`.** Add a block for this session right under the intro (never above
-   the frontmatter):
+2. **Update `_meta/hot.md`.** Add a block `## <project or folder>: <topic> - YYYY-MM-DD` for
+   this session right under the intro (never above the frontmatter):
    - What we worked on
    - Open threads / decisions made
    - What's next
-   Move finished threads out of hot.md (to `_meta/shipped-log.md`, one line each).
+   Delete threads that are finished - the session log keeps their history.
 3. **Append to `_meta/sessions/YYYY-MM-DD.md`** - a new `# Session N - <topic>` section in this format:
 
    ```markdown
